@@ -1,0 +1,126 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title> Grooves & Vinyls</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- NAVBAR -->
+  <nav>
+    <a class="nav-logo" href="#">
+      <i class="fa-solid fa-headphones"></i>
+      <span>SoundMatch</span>
+    </a>
+    <ul class="nav-links">
+      <li><a href="#">Artists</a></li>
+      <li><a href="#">About</a></li>
+    </ul>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="hero-eyebrow"><i class="fa-solid fa-music"></i> Music Discovery Engine</div>
+    <h1>Find Your <span>Perfect Album</span></h1>
+    <p>Browse iconic albums across every genre, mood, and era. Filter, explore, and discover your next obsession.</p>
+    <div class="search-wrap">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <input type="text" id="searchInput" placeholder="Search by album or artist..." />
+    </div>
+    <p class="result-count">Showing <span id="countNum">16</span> albums</p>
+    <div class="spotify-connect">
+      <button id="spotifyBtn"><i class="fa-brands fa-spotify"></i> Connect Spotify</button>
+      <span id="spotifyNote"></span>
+    </div>
+  </section>
+
+  <!-- FILTERS -->
+  <section class="filters-section">
+    <p class="filters-label"><i class="fa-solid fa-sliders"></i> &nbsp;Filter Albums</p>
+    <div class="filter-groups">
+      <div class="filter-group">
+        <span class="filter-group-title">Genre</span>
+        <div class="chip-row" id="genreChips">
+          <div class="chip active" data-filter="genre" data-value="all">All</div>
+          <div class="chip" data-filter="genre" data-value="Pop">Pop</div>
+          <div class="chip" data-filter="genre" data-value="Rock">Rock</div>
+          <div class="chip" data-filter="genre" data-value="Hip-Hop">Hip-Hop</div>
+          <div class="chip" data-filter="genre" data-value="R&B">R&amp;B</div>
+          <div class="chip" data-filter="genre" data-value="Jazz">Jazz</div>
+          <div class="chip" data-filter="genre" data-value="Electronic">Electronic</div>
+        </div>
+      </div>
+      <div class="filter-divider"></div>
+      <div class="filter-group">
+        <span class="filter-group-title">Decade</span>
+        <div class="chip-row" id="decadeChips">
+          <div class="chip active" data-filter="decade" data-value="all">All</div>
+          <div class="chip" data-filter="decade" data-value="60s">60s</div>
+          <div class="chip" data-filter="decade" data-value="70s">70s</div>
+          <div class="chip" data-filter="decade" data-value="80s">80s</div>
+          <div class="chip" data-filter="decade" data-value="90s">90s</div>
+          <div class="chip" data-filter="decade" data-value="2000s">2000s</div>
+          <div class="chip" data-filter="decade" data-value="2010s">2010s</div>
+          <div class="chip" data-filter="decade" data-value="2020s">2020s</div>
+        </div>
+      </div>
+      <button class="clear-btn" id="clearFilters"><i class="fa-solid fa-rotate-left"></i> Reset Filters</button>
+    </div>
+  </section>
+
+  <!-- SORT BAR -->
+  <div class="sort-bar">
+    <span><b id="visibleCount">16</b> albums found</span>
+    <select class="sort-select" id="sortSelect">
+      <option value="default">Sort: Default</option>
+      <option value="year-desc">Year: Newest First</option>
+      <option value="year-asc">Year: Oldest First</option>
+      <option value="title-az">Title: Aâ€“Z</option>
+      <option value="artist-az">Artist: Aâ€“Z</option>
+    </select>
+  </div>
+
+  <!-- ALBUM GRID -->
+  <section class="grid-section">
+    <div id="albumGrid">
+      <div id="emptyState">
+        <i class="fa-solid fa-record-vinyl"></i>
+        <h3>No albums found</h3>
+        <p>Try adjusting your filters or search term.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <p>Built with <span>&hearts;</span> by SoundMatch &mdash; A music discovery project &copy; 2026</p>
+  </footer>
+
+  <!-- MODAL -->
+  <div id="modal" role="dialog" aria-modal="true">
+    <div class="modal-box" id="modalBox">
+      <div class="modal-cover" id="modalCover">
+        <button class="modal-close" id="modalClose" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <h2 class="modal-title" id="modalTitle"></h2>
+        <p class="modal-artist" id="modalArtist"></p>
+        <div class="modal-tags" id="modalTags"></div>
+        <p class="modal-desc" id="modalDesc"></p>
+        <div class="modal-actions">
+          <button class="btn-primary" id="modalListen"><i class="fa-solid fa-play"></i> Listen Now</button>
+          <button class="btn-secondary" id="modalAdd"><i class="fa-solid fa-plus"></i> Playlist</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
