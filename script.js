@@ -1,6 +1,9 @@
-/* ========================================================
-   iTUNES API  —  Album Cover Lookup (free, no authentication)
-======================================================== */
+const COVER_CACHE_KEY = 'sound-diggers-cover-cache-v1';
+const BLOCKED_TITLE_WORDS = ['tribute', 'karaoke', 'instrumental', 'interview', 'live', 'commentary'];
+
+let currentAlbum = null;
+let coversLoading = true;
+
 function normalizeText(value) {
   return (value || '')
     .toLowerCase()
@@ -8,14 +11,12 @@ function normalizeText(value) {
     .trim();
 }
 
-function normalizeAlbumTitle(value) {
+function simplifyAlbumTitle(value) {
   return normalizeText(value)
     .replace(/\b(deluxe|edition|remaster|remastered|version|single|ep|explicit|clean)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
-
-const COVER_CACHE_KEY = 'soundmatch-cover-cache-v1';
 
 function getAlbumCacheKey(album) {
   return `${normalizeText(album.title)}|${normalizeText(album.artist)}`;
@@ -23,11 +24,9 @@ function getAlbumCacheKey(album) {
 
 function readCoverCache() {
   try {
-    const raw = localStorage.getItem(COVER_CACHE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch (e) {
+    const saved = localStorage.getItem(COVER_CACHE_KEY);
+    return saved ? JSON.parse(saved) : {};
+  } catch (error) {
     return {};
   }
 }
@@ -35,148 +34,140 @@ function readCoverCache() {
 function writeCoverCache(cache) {
   try {
     localStorage.setItem(COVER_CACHE_KEY, JSON.stringify(cache));
-  } catch (e) {
-    // Ignore storage quota/privacy mode errors.
+  } catch (error) {
   }
 }
 
-function getWordSet(value) {
-  return new Set(normalizeText(value).split(' ').filter(Boolean));
+function isBlockedTitle(title) {
+  const cleanedTitle = normalizeText(title);
+  return BLOCKED_TITLE_WORDS.some(word => cleanedTitle.includes(word));
 }
 
-function overlapScore(a, b) {
-  const aSet = getWordSet(a);
-  const bSet = getWordSet(b);
-  if (!aSet.size || !bSet.size) return 0;
-  let overlap = 0;
-  for (const token of aSet) {
-    if (bSet.has(token)) overlap += 1;
-  }
-  return overlap / Math.max(aSet.size, bSet.size);
+function textMatches(a, b) {
+  return a === b || a.includes(b) || b.includes(a);
 }
 
-function pickBestItunesMatch(results, title, artist, year, tracks) {
-  const wantedTitle = normalizeText(title);
-  const wantedCoreTitle = normalizeAlbumTitle(title);
-  const wantedArtist = normalizeText(artist);
-  const blockedTerms = ['tribute', 'karaoke', 'instrumental', 'interview', 'live', 'commentary'];
+function titleMatches(resultTitle, albumTitle) {
+  const cleanedResultTitle = normalizeText(resultTitle);
+  const cleanedAlbumTitle = normalizeText(albumTitle);
+  const simpleResultTitle = simplifyAlbumTitle(resultTitle);
+  const simpleAlbumTitle = simplifyAlbumTitle(albumTitle);
 
-  const ranked = (results || []).map(item => {
-    const itemTitle = normalizeText(item.collectionName);
-    const itemCoreTitle = normalizeAlbumTitle(item.collectionName);
-    const itemArtist = normalizeText(item.artistName);
-    const itemYear = Number((item.releaseDate || '').slice(0, 4));
-    const itemTracks = Number(item.trackCount || 0);
-    const titleOverlap = overlapScore(itemTitle, wantedTitle);
-    const coreTitleOverlap = overlapScore(itemCoreTitle, wantedCoreTitle);
-    const artistOverlap = overlapScore(itemArtist, wantedArtist);
-    let score = 0;
+  return textMatches(cleanedResultTitle, cleanedAlbumTitle) || textMatches(simpleResultTitle, simpleAlbumTitle);
+}
 
-    if (itemTitle === wantedTitle) score += 6;
-    if (itemArtist === wantedArtist) score += 6;
-    if (itemTitle.includes(wantedTitle) || wantedTitle.includes(itemTitle)) score += 3;
-    if (itemArtist.includes(wantedArtist) || wantedArtist.includes(itemArtist)) score += 3;
-    score += Math.round(titleOverlap * 8);
-    score += Math.round(coreTitleOverlap * 10);
-    score += Math.round(artistOverlap * 6);
-    if (year && itemYear === year) score += 4;
-    if (year && itemYear && Math.abs(itemYear - year) <= 1) score += 2;
-    if (tracks && itemTracks && Math.abs(itemTracks - tracks) <= 1) score += 2;
-    if (blockedTerms.some(term => itemTitle.includes(term))) score -= 5;
+function artistMatches(resultArtist, albumArtist) {
+  return textMatches(normalizeText(resultArtist), normalizeText(albumArtist));
+}
 
-    return { item, score, titleOverlap, coreTitleOverlap, artistOverlap };
-  });
+function scoreItunesResult(result, album) {
+  if (!result) return -1;
+  if (isBlockedTitle(result.collectionName)) return -1;
+  if (!titleMatches(result.collectionName, album.title)) return -1;
+  if (!artistMatches(result.artistName, album.artist)) return -1;
 
-  ranked.sort((a, b) => b.score - a.score);
+  const cleanedResultTitle = normalizeText(result.collectionName);
+  const cleanedAlbumTitle = normalizeText(album.title);
+  const simpleResultTitle = simplifyAlbumTitle(result.collectionName);
+  const simpleAlbumTitle = simplifyAlbumTitle(album.title);
+  const cleanedResultArtist = normalizeText(result.artistName);
+  const cleanedAlbumArtist = normalizeText(album.artist);
+  const resultYear = Number((result.releaseDate || '').slice(0, 4));
+  const resultTracks = Number(result.trackCount || 0);
 
-  function isAcceptableMatch(candidate) {
-    if (!candidate) return false;
-    const candidateTitle = normalizeText(candidate.item.collectionName);
-    const candidateCoreTitle = normalizeAlbumTitle(candidate.item.collectionName);
+  let score = 0;
 
-    const titleLooksRelevant =
-      candidate.titleOverlap >= 0.25 ||
-      candidate.coreTitleOverlap >= 0.25 ||
-      candidateTitle === wantedTitle ||
-      candidateTitle.includes(wantedTitle) ||
-      wantedTitle.includes(candidateTitle) ||
-      candidateCoreTitle === wantedCoreTitle;
+  if (cleanedResultTitle === cleanedAlbumTitle) score += 5;
+  if (simpleResultTitle === simpleAlbumTitle) score += 5;
+  if (cleanedResultArtist === cleanedAlbumArtist) score += 5;
+  if (album.year && resultYear === album.year) score += 3;
+  if (album.year && resultYear && Math.abs(resultYear - album.year) <= 1) score += 1;
+  if (album.tracks && resultTracks && Math.abs(resultTracks - album.tracks) <= 1) score += 1;
 
-    const artistLooksRelevant =
-      candidate.artistOverlap >= 0.6 ||
-      normalizeText(candidate.item.artistName) === wantedArtist ||
-      normalizeText(candidate.item.artistName).includes(wantedArtist) ||
-      wantedArtist.includes(normalizeText(candidate.item.artistName));
+  return score;
+}
 
-    return titleLooksRelevant && artistLooksRelevant;
+function findBestItunesResult(results, album) {
+  let bestResult = null;
+  let bestScore = -1;
+
+  for (const result of results || []) {
+    const score = scoreItunesResult(result, album);
+    if (score > bestScore) {
+      bestScore = score;
+      bestResult = result;
+    }
   }
 
-  const best = ranked.find(isAcceptableMatch);
-  if (!best) return null;
-
-  return best.item;
+  return bestResult;
 }
 
-async function itunesLookup(title, artist, year, tracks) {
+function getArtworkUrl(result) {
+  const artwork = result?.artworkUrl100 || result?.artworkUrl60 || result?.artworkUrl30;
+  if (!artwork) return null;
+  return artwork.replace(/\/\d+x\d+bb\.(jpg|png)/, '/600x600bb.$1');
+}
+
+function getItunesEndpoints(album) {
+  const fullQuery = `${album.title} ${album.artist}`.trim();
+
+  return [
+    `https://itunes.apple.com/search?term=${encodeURIComponent(fullQuery)}&entity=album&limit=10`,
+    `https://itunes.apple.com/search?term=${encodeURIComponent(album.title)}&entity=album&attribute=albumTerm&limit=25`,
+    `https://itunes.apple.com/search?term=${encodeURIComponent(album.artist)}&entity=album&attribute=artistTerm&limit=25`,
+    `https://itunes.apple.com/search?term=${encodeURIComponent(fullQuery)}&entity=song&limit=15`
+  ];
+}
+
+async function itunesLookup(album) {
   try {
-    const query = `${title} ${artist}`.trim();
-    const endpoints = [
-      `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=album&limit=10`,
-      `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=album&limit=10`,
-      `https://itunes.apple.com/search?term=${encodeURIComponent(title)}&entity=album&attribute=albumTerm&limit=25`,
-      `https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&entity=album&attribute=artistTerm&limit=25`,
-      `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=15`
-    ];
+    const endpoints = getItunesEndpoints(album);
 
     for (const url of endpoints) {
-      const res = await fetch(url);
-      if (!res.ok) continue;
-      const data = await res.json();
-      const hit = pickBestItunesMatch(data.results, title, artist, year, tracks);
-      const artwork = hit?.artworkUrl100 || hit?.artworkUrl60 || hit?.artworkUrl30;
-      if (artwork) {
-        return artwork.replace(/\/\d+x\d+bb\.(jpg|png)/, '/600x600bb.$1');
-      }
+      const response = await fetch(url);
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      const bestResult = findBestItunesResult(data.results, album);
+      const artworkUrl = getArtworkUrl(bestResult);
+
+      if (artworkUrl) return artworkUrl;
     }
+
     return null;
-  } catch (e) {
-    console.error('iTunes lookup failed for', title, artist);
+  } catch (error) {
+    console.error('iTunes lookup failed for', album.title, album.artist);
     return null;
   }
 }
 
 async function loadAlbumCoverURLs() {
   const statusEl = document.getElementById('apiStatus');
+  const coverCache = readCoverCache();
+  let loadedCount = 0;
+
   if (statusEl) statusEl.textContent = 'API status: loading album covers...';
 
   coversLoading = true;
-  const coverCache = readCoverCache();
 
-  let loaded = 0;
   for (const album of albums) {
-    if (album.manualCoverUrl) {
-      album.coverUrl = album.manualCoverUrl;
-    } else {
-      const cached = coverCache[getAlbumCacheKey(album)];
-      if (cached) album.coverUrl = cached;
-    }
-    if (album.coverUrl) loaded += 1;
+    const cacheKey = getAlbumCacheKey(album);
+    album.coverUrl = album.manualCoverUrl || coverCache[cacheKey] || null;
+    if (album.coverUrl) loadedCount += 1;
   }
 
   renderGrid();
 
   for (const album of albums) {
-    if (album.manualCoverUrl || album.coverUrl) {
-      continue;
-    }
+    if (album.coverUrl) continue;
 
-    const resolvedUrl = await itunesLookup(album.title, album.artist, album.year, album.tracks);
-    if (resolvedUrl) {
-      album.coverUrl = resolvedUrl;
-      coverCache[getAlbumCacheKey(album)] = resolvedUrl;
-      loaded += 1;
-      renderGrid();
-    }
+    const artworkUrl = await itunesLookup(album);
+    if (!artworkUrl) continue;
+
+    album.coverUrl = artworkUrl;
+    coverCache[getAlbumCacheKey(album)] = artworkUrl;
+    loadedCount += 1;
+    renderGrid();
   }
 
   writeCoverCache(coverCache);
@@ -184,18 +175,12 @@ async function loadAlbumCoverURLs() {
   renderGrid();
 
   if (statusEl) {
-    statusEl.textContent = loaded > 0
-      ? `API status: connected (${loaded}/${albums.length} covers loaded)`
+    statusEl.textContent = loadedCount > 0
+      ? `API status: connected (${loadedCount}/${albums.length} covers loaded)`
       : 'API status: request failed (using emoji fallback)';
   }
 }
 
-let currentAlbum = null;
-let coversLoading = true;
-
-/* ========================================================
-   DATA
-======================================================== */
 const albums = [
   {
     id: 1, title: "Thriller", artist: "Michael Jackson",
