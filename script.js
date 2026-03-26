@@ -1,8 +1,31 @@
-const COVER_CACHE_KEY = 'sound-diggers-cover-cache-v1';
-const BLOCKED_TITLE_WORDS = ['tribute', 'karaoke', 'instrumental', 'interview', 'live', 'commentary'];
+﻿const BLOCKED_TITLE_WORDS = ['tribute', 'karaoke', 'instrumental', 'interview', 'live', 'commentary'];
+
+/* ========================================================
+   DEFAULT ALBUMS — edit this list to change the front page
+======================================================== */
+const DEFAULT_ALBUMS = [
+  { title: 'Thriller',                        artist: 'Michael Jackson'       },
+  { title: 'Kind of Blue',                    artist: 'Miles Davis'           },
+  { title: 'Nevermind',                       artist: 'Nirvana'               },
+  { title: 'To Pimp a Butterfly',             artist: 'Kendrick Lamar'        },
+  { title: 'Random Access Memories',          artist: 'Daft Punk'             },
+  { title: 'Madvillainy',                     artist: 'Madvillain'            },
+  { title: 'Enter the Wu-Tang (36 Chambers)', artist: 'Wu-Tang Clan'          },
+  { title: 'The Battle of Los Angeles',       artist: 'Rage Against the Machine' },
+  { title: 'Currents',                        artist: 'Tame Impala'           },
+  { title: 'Wish You Were Here',              artist: 'Pink Floyd'            },
+  { title: '2001',                            artist: 'Dr. Dre'               },
+  { title: 'The Hurting',                     artist: 'Tears for Fears'       },
+  { title: 'The Smiths',                      artist: 'The Smiths'            },
+  { title: 'channel ORANGE',                   artist: 'Frank Ocean'           },
+  { title: 'First Two Seven Inches',          artist: 'Minor Threat'          },
+  { title: "DON'T TAP THE GLASS",            artist: 'Tyler, the Creator'    },
+];
 
 let currentAlbum = null;
 let coversLoading = true;
+let albums = [];
+let searchDebounceTimer = null;
 
 function normalizeText(value) {
   return (value || '')
@@ -11,291 +34,143 @@ function normalizeText(value) {
     .trim();
 }
 
-function simplifyAlbumTitle(value) {
-  return normalizeText(value)
-    .replace(/\b(deluxe|edition|remaster|remastered|version|single|ep|explicit|clean)\b/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+/* ========================================================
+   GENRE HELPERS
+======================================================== */
+const genreEmoji = {
+  'Pop': '🎵', 'Rock': '🎸', 'Hip-Hop': '🎤', 'R&B': '🎶', 'Jazz': '🎺', 'Electronic': '🤖'
+};
 
-function getAlbumCacheKey(album) {
-  return `${normalizeText(album.title)}|${normalizeText(album.artist)}`;
-}
+const genreGradient = {
+  'Pop':        'linear-gradient(135deg, #1a1a2e, #e94560)',
+  'Rock':       'linear-gradient(135deg, #2c3e50, #3498db)',
+  'Hip-Hop':    'linear-gradient(135deg, #1a1a1a, #f5c518)',
+  'R&B':        'linear-gradient(135deg, #0f2027, #203a43)',
+  'Jazz':       'linear-gradient(135deg, #0f2027, #203a43, #2c5364)',
+  'Electronic': 'linear-gradient(135deg, #7f00ff, #e100ff)',
+};
 
-function readCoverCache() {
-  try {
-    const saved = localStorage.getItem(COVER_CACHE_KEY);
-    return saved ? JSON.parse(saved) : {};
-  } catch (error) {
-    return {};
-  }
-}
-
-function writeCoverCache(cache) {
-  try {
-    localStorage.setItem(COVER_CACHE_KEY, JSON.stringify(cache));
-  } catch (error) {
-  }
+function mapGenre(itunesGenre) {
+  const g = (itunesGenre || '').toLowerCase();
+  if (g.includes('hip') || g.includes('rap')) return 'Hip-Hop';
+  if (g.includes('r&b') || g.includes('soul')) return 'R&B';
+  if (g.includes('jazz')) return 'Jazz';
+  if (g.includes('electronic') || g.includes('dance') || g.includes('techno')) return 'Electronic';
+  if (g.includes('rock') || g.includes('alternative') || g.includes('metal') || g.includes('punk') || g.includes('indie')) return 'Rock';
+  return 'Pop';
 }
 
 function isBlockedTitle(title) {
-  const cleanedTitle = normalizeText(title);
-  return BLOCKED_TITLE_WORDS.some(word => cleanedTitle.includes(word));
+  const cleaned = normalizeText(title);
+  return BLOCKED_TITLE_WORDS.some(word => cleaned.includes(word));
 }
 
-function textMatches(a, b) {
-  return a === b || a.includes(b) || b.includes(a);
+/* ========================================================
+   API — MAP ITUNES RESULT TO ALBUM OBJECT
+======================================================== */
+function mapItunesAlbum(result, id) {
+  const year = parseInt((result.releaseDate || '').slice(0, 4)) || null;
+  const genre = mapGenre(result.primaryGenreName);
+  const artwork = result.artworkUrl100 || result.artworkUrl60 || null;
+  return {
+    id,
+    title: result.collectionName || 'Unknown Album',
+    artist: result.artistName || 'Unknown Artist',
+    year,
+    genre,
+    emoji: genreEmoji[genre] || '🎵',
+    gradient: genreGradient[genre] || 'linear-gradient(135deg, #1a1a2e, #16213e)',
+    desc: `${result.collectionName} by ${result.artistName}${year ? ', released in ' + year : ''}.`,
+    tracks: result.trackCount || 0,
+    coverUrl: artwork ? artwork.replace(/\/\d+x\d+bb\.(jpg|png)/, '/600x600bb.$1') : null
+  };
 }
 
-function titleMatches(resultTitle, albumTitle) {
-  const cleanedResultTitle = normalizeText(resultTitle);
-  const cleanedAlbumTitle = normalizeText(albumTitle);
-  const simpleResultTitle = simplifyAlbumTitle(resultTitle);
-  const simpleAlbumTitle = simplifyAlbumTitle(albumTitle);
-
-  return textMatches(cleanedResultTitle, cleanedAlbumTitle) || textMatches(simpleResultTitle, simpleAlbumTitle);
-}
-
-function artistMatches(resultArtist, albumArtist) {
-  return textMatches(normalizeText(resultArtist), normalizeText(albumArtist));
-}
-
-function scoreItunesResult(result, album) {
-  if (!result) return -1;
-  if (isBlockedTitle(result.collectionName)) return -1;
-  if (!titleMatches(result.collectionName, album.title)) return -1;
-  if (!artistMatches(result.artistName, album.artist)) return -1;
-
-  const cleanedResultTitle = normalizeText(result.collectionName);
-  const cleanedAlbumTitle = normalizeText(album.title);
-  const simpleResultTitle = simplifyAlbumTitle(result.collectionName);
-  const simpleAlbumTitle = simplifyAlbumTitle(album.title);
-  const cleanedResultArtist = normalizeText(result.artistName);
-  const cleanedAlbumArtist = normalizeText(album.artist);
-  const resultYear = Number((result.releaseDate || '').slice(0, 4));
-  const resultTracks = Number(result.trackCount || 0);
-
-  let score = 0;
-
-  if (cleanedResultTitle === cleanedAlbumTitle) score += 5;
-  if (simpleResultTitle === simpleAlbumTitle) score += 5;
-  if (cleanedResultArtist === cleanedAlbumArtist) score += 5;
-  if (album.year && resultYear === album.year) score += 3;
-  if (album.year && resultYear && Math.abs(resultYear - album.year) <= 1) score += 1;
-  if (album.tracks && resultTracks && Math.abs(resultTracks - album.tracks) <= 1) score += 1;
-
-  return score;
-}
-
-function findBestItunesResult(results, album) {
-  let bestResult = null;
-  let bestScore = -1;
-
-  for (const result of results || []) {
-    const score = scoreItunesResult(result, album);
-    if (score > bestScore) {
-      bestScore = score;
-      bestResult = result;
-    }
-  }
-
-  return bestResult;
-}
-
-function getArtworkUrl(result) {
-  const artwork = result?.artworkUrl100 || result?.artworkUrl60 || result?.artworkUrl30;
-  if (!artwork) return null;
-  return artwork.replace(/\/\d+x\d+bb\.(jpg|png)/, '/600x600bb.$1');
-}
-
-function getItunesEndpoints(album) {
-  const fullQuery = `${album.title} ${album.artist}`.trim();
-
-  return [
-    `https://itunes.apple.com/search?term=${encodeURIComponent(fullQuery)}&entity=album&limit=10`,
-    `https://itunes.apple.com/search?term=${encodeURIComponent(album.title)}&entity=album&attribute=albumTerm&limit=25`,
-    `https://itunes.apple.com/search?term=${encodeURIComponent(album.artist)}&entity=album&attribute=artistTerm&limit=25`,
-    `https://itunes.apple.com/search?term=${encodeURIComponent(fullQuery)}&entity=song&limit=15`
-  ];
-}
-
-async function itunesLookup(album) {
-  try {
-    const endpoints = getItunesEndpoints(album);
-
-    for (const url of endpoints) {
-      const response = await fetch(url);
-      if (!response.ok) continue;
-
-      const data = await response.json();
-      const bestResult = findBestItunesResult(data.results, album);
-      const artworkUrl = getArtworkUrl(bestResult);
-
-      if (artworkUrl) return artworkUrl;
-    }
-
-    return null;
-  } catch (error) {
-    console.error('iTunes lookup failed for', album.title, album.artist);
-    return null;
-  }
-}
-
-async function loadAlbumCoverURLs() {
+/* ========================================================
+   API — FETCH ALBUMS BY SEARCH QUERY
+======================================================== */
+async function fetchAlbums(query) {
   const statusEl = document.getElementById('apiStatus');
-  const coverCache = readCoverCache();
-  let loadedCount = 0;
-
-  if (statusEl) statusEl.textContent = 'API status: loading album covers...';
+  if (statusEl) statusEl.textContent = 'API status: loading...';
 
   coversLoading = true;
-
-  for (const album of albums) {
-    const cacheKey = getAlbumCacheKey(album);
-    album.coverUrl = album.manualCoverUrl || coverCache[cacheKey] || null;
-    if (album.coverUrl) loadedCount += 1;
-  }
-
+  albums = [];
   renderGrid();
 
-  for (const album of albums) {
-    if (album.coverUrl) continue;
+  try {
+    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=album&limit=25`;
+    const response = await fetch(url);
+    const data = await response.json();
 
-    const artworkUrl = await itunesLookup(album);
-    if (!artworkUrl) continue;
+    const seen = new Set();
+    for (const result of data.results || []) {
+      if (!result.collectionName || !result.artworkUrl100) continue;
+      if (result.collectionType === 'Compilation') continue;
+      if (isBlockedTitle(result.collectionName)) continue;
+      const key = `${normalizeText(result.collectionName)}|${normalizeText(result.artistName)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      albums.push(mapItunesAlbum(result, albums.length + 1));
+    }
 
-    album.coverUrl = artworkUrl;
-    coverCache[getAlbumCacheKey(album)] = artworkUrl;
-    loadedCount += 1;
-    renderGrid();
+    if (statusEl) {
+      statusEl.textContent = albums.length > 0
+        ? `API status: connected (${albums.length} albums loaded)`
+        : 'API status: no results found';
+    }
+  } catch (error) {
+    console.error('Failed to fetch albums:', error);
+    if (statusEl) statusEl.textContent = 'API status: request failed';
   }
 
-  writeCoverCache(coverCache);
   coversLoading = false;
   renderGrid();
-
-  if (statusEl) {
-    statusEl.textContent = loadedCount > 0
-      ? `API status: connected (${loadedCount}/${albums.length} covers loaded)`
-      : 'API status: request failed (using emoji fallback)';
-  }
 }
 
-const albums = [
-  {
-    id: 1, title: "Thriller", artist: "Michael Jackson",
-    year: 1982, genre: "Pop",
-    emoji: "🕺", gradient: "linear-gradient(135deg, #1a1a2e, #e94560)",
-    desc: "The best-selling album of all time. A masterclass in pop production with iconic tracks that defined an era.",
-    tracks: 9
-  },
-  {
-    id: 2, title: "First Two Seven Inches", artist: "Minor Threat",
-    year: 1984, genre: "Rock",
-    emoji: "⚡", gradient: "linear-gradient(135deg, #111111, #7a0000)",
-    desc: "A foundational D.C. hardcore release collecting Minor Threat's early EP material with raw speed, urgency, and straight-edge influence.",
-    tracks: 14
-  },
-  {
-    id: 3, title: "Kind of Blue", artist: "Miles Davis",
-    year: 1959, genre: "Jazz",
-    emoji: "🎺", gradient: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)",
-    desc: "The best-selling jazz album of all time. Defined modal jazz and set a new standard for improvisation and cool.",
-    tracks: 5
-  },
-  {
-    id: 4, title: "DON'T TAP THE GLASS", artist: "Tyler, the Creator",
-    year: 2025, genre: "Hip-Hop",
-    emoji: "🩷", gradient: "linear-gradient(135deg, #f2a7c0, #c2185b)",
-    desc: "A recent Tyler release with punchy production, sharp songwriting, and a modern rap focus that still feels experimental.",
-    tracks: 10
-  },
-  {
-    id: 5, title: "2001", artist: "Dr. Dre",
-    year: 1999, genre: "Hip-Hop",
-    emoji: "🎤", gradient: "linear-gradient(135deg, #134e5e, #71b280)",
-    desc: "A polished and influential Dr. Dre classic that defined late-90s West Coast hip-hop production.",
-    tracks: 22
-  },
-  {
-    id: 6, title: "Random Access Memories", artist: "Daft Punk",
-    year: 2013, genre: "Electronic",
-    emoji: "🤖", gradient: "linear-gradient(135deg, #b8860b, #ffd700)",
-    desc: "A love letter to the golden age of disco and funk, crafted with live musicians and state-of-the-art production.",
-    tracks: 13
-  },
-  {
-    id: 7, title: "The Smiths", artist: "The Smiths",
-    year: 1984, genre: "Rock",
-    emoji: "🌿", gradient: "linear-gradient(135deg, #3a5a40, #588157)",
-    desc: "The debut album that introduced The Smiths' jangling guitars, melancholic wit, and unmistakable voice to British alternative music.",
-    tracks: 11
-  },
-  {
-    id: 8, title: "To Pimp a Butterfly", artist: "Kendrick Lamar",
-    year: 2015, genre: "Hip-Hop",
-    emoji: "🦋", gradient: "linear-gradient(135deg, #1a1a1a, #4a4a4a, #1a6b3c)",
-    desc: "A politically charged jazz-funk-hip-hop masterwork exploring race, identity, and systemic inequality in America.",
-    tracks: 16
-  },
-  {
-    id: 9, title: "Swim Good - Single", artist: "Frank Ocean",
-    year: 2011, genre: "R&B",
-    emoji: "🌊", gradient: "linear-gradient(135deg, #4facfe, #00f2fe)",
-    desc: "A moody, melodic Frank Ocean single from his early breakout era, blending introspective songwriting with alt-R&B atmosphere.",
-    tracks: 1
-  },
-  {
-    id: 10, title: "Madvillainy", artist: "Madvillain",
-    year: 2004, genre: "Hip-Hop",
-    emoji: "🎭", gradient: "linear-gradient(135deg, #2f2f2f, #6b7280)",
-    desc: "A cult classic collaboration between MF DOOM and Madlib, known for abstract lyricism, dusty loops, and unconventional song structure.",
-    tracks: 22
-  },
-  {
-    id: 11, title: "Wish You Were Here", artist: "Pink Floyd",
-    year: 1975, genre: "Rock",
-    emoji: "🌑", gradient: "linear-gradient(135deg, #000000, #434343)",
-    desc: "A landmark progressive rock album balancing emotional depth, rich arrangements, and some of Pink Floyd's most celebrated songwriting.",
-    tracks: 5
-  },
-  {
-    id: 12, title: "Currents", artist: "Tame Impala",
-    year: 2015, genre: "Electronic",
-    emoji: "🌀", gradient: "linear-gradient(135deg, #7f00ff, #e100ff)",
-    desc: "Kevin Parker's shift into electronic pop, filled with lush synths and confessional lyrics about personal transformation.",
-    tracks: 13
-  },
-  {
-    id: 13, title: "Enter the Wu-Tang (36 Chambers)", artist: "Wu-Tang Clan",
-    year: 1993, genre: "Hip-Hop",
-    emoji: "⚔️", gradient: "linear-gradient(135deg, #1a1a1a, #f5c518)",
-    desc: "The raw, gritty debut that changed hip-hop forever. Nine MCs from Staten Island forged one of the most iconic group records ever made.",
-    tracks: 12
-  },
-  {
-    id: 14, title: "The Hurting", artist: "Tears for Fears",
-    year: 1983, genre: "Pop",
-    emoji: "😢", gradient: "linear-gradient(135deg, #1a1a2e, #16213e)",
-    desc: "The debut album that launched Tears for Fears into the spotlight. A haunting synth-pop record rooted in themes of pain, isolation, and primal therapy.",
-    tracks: 10
-  },
-  {
-    id: 15, title: "The Battle of Los Angeles", artist: "Rage Against the Machine",
-    year: 1999, genre: "Rock",
-    emoji: "✊", gradient: "linear-gradient(135deg, #7f0000, #d32f2f)",
-    desc: "A ferocious fusion of hip-hop, metal, and punk-fueled politics. One of the most explosive and influential rock records of the 90s.",
-    tracks: 11
-  },
-  {
-    id: 16, title: "Nevermind", artist: "Nirvana",
-    year: 1991, genre: "Rock",
-    emoji: "💥", gradient: "linear-gradient(135deg, #2c3e50, #3498db)",
-    manualCoverUrl: "https://upload.wikimedia.org/wikipedia/en/b/b7/NirvanaNevermindalbumcover.jpg",
-    desc: "The album that brought alternative rock to the mainstream and defined a generation's disillusionment and raw energy.",
-    tracks: 13
+/* ========================================================
+   API — LOAD DEFAULT ALBUMS ON PAGE LOAD
+======================================================== */
+async function loadDefaultAlbums() {
+  const statusEl = document.getElementById('apiStatus');
+  if (statusEl) statusEl.textContent = 'API status: loading albums...';
+
+  coversLoading = true;
+  albums = [];
+  renderGrid();
+
+  try {
+    const results = await Promise.all(
+      DEFAULT_ALBUMS.map(({ title, artist }) =>
+        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(title + ' ' + artist)}&entity=album&limit=5`)
+          .then(r => r.json())
+          .then(data => {
+            const match = (data.results || []).find(
+              r => r.artworkUrl100 && !isBlockedTitle(r.collectionName)
+            );
+            return match || null;
+          })
+          .catch(() => null)
+      )
+    );
+
+    results.forEach((result, i) => {
+      if (result) albums.push(mapItunesAlbum(result, i + 1));
+    });
+
+    if (statusEl) {
+      statusEl.textContent = albums.length > 0
+        ? `API status: connected (${albums.length} albums loaded)`
+        : 'API status: no results found';
+    }
+  } catch (error) {
+    console.error('Failed to load albums:', error);
+    if (statusEl) statusEl.textContent = 'API status: request failed';
   }
-];
+
+  coversLoading = false;
+  renderGrid();
+}
+
 
 /* ========================================================
    GENRE COLORS
@@ -312,7 +187,7 @@ const genreColors = {
 /* ========================================================
    STATE
 ======================================================== */
-const state = { search: "", sort: "default" };
+const state = { sort: "default" };
 
 /* ========================================================
    HELPERS
@@ -328,10 +203,7 @@ function getDecade(year) {
 }
 
 function filterAndSort() {
-  const q = state.search.toLowerCase();
-  let result = albums.filter(a => {
-    return !q || a.title.toLowerCase().includes(q) || a.artist.toLowerCase().includes(q);
-  });
+  let result = [...albums];
 
   if (state.sort.startsWith('decade-')) {
     const decade = state.sort.replace('decade-', '');
@@ -434,8 +306,15 @@ document.getElementById('modalListen').addEventListener('click', () => {
 });
 
 document.getElementById('searchInput').addEventListener('input', e => {
-  state.search = e.target.value;
-  renderGrid();
+  const query = e.target.value.trim();
+  clearTimeout(searchDebounceTimer);
+  if (!query) {
+    loadDefaultAlbums();
+    return;
+  }
+  searchDebounceTimer = setTimeout(() => {
+    fetchAlbums(query);
+  }, 500);
 });
 
 /* ========================================================
@@ -443,8 +322,6 @@ document.getElementById('searchInput').addEventListener('input', e => {
 ======================================================== */
 document.getElementById("sortSelect").addEventListener("change", e => {
   state.sort = e.target.value;
-  document.getElementById("searchInput").value = "";
-  state.search = "";
   renderGrid();
 });
 
@@ -460,5 +337,5 @@ document.addEventListener("keydown", e => {
 ======================================================== */
 (async () => {
   renderGrid();
-  await loadAlbumCoverURLs();
+  await loadDefaultAlbums();
 })();
