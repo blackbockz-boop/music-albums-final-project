@@ -34,55 +34,27 @@
       <input type="text" id="searchInput" placeholder="Search by album or artist..." />
     </div>
     <p class="result-count">Showing <span id="countNum">16</span> albums</p>
-    <div class="spotify-connect">
-      <button id="spotifyBtn"><i class="fa-brands fa-spotify"></i> Connect Spotify</button>
-      <span id="spotifyNote"></span>
-    </div>
+    <p class="api-status" id="apiStatus">API status: loading album covers...</p>
   </section>
 
-  <!-- FILTERS -->
-  <section class="filters-section">
-    <p class="filters-label"><i class="fa-solid fa-sliders"></i> &nbsp;Filter Albums</p>
-    <div class="filter-groups">
-      <div class="filter-group">
-        <span class="filter-group-title">Genre</span>
-        <div class="chip-row" id="genreChips">
-          <div class="chip active" data-filter="genre" data-value="all">All</div>
-          <div class="chip" data-filter="genre" data-value="Pop">Pop</div>
-          <div class="chip" data-filter="genre" data-value="Rock">Rock</div>
-          <div class="chip" data-filter="genre" data-value="Hip-Hop">Hip-Hop</div>
-          <div class="chip" data-filter="genre" data-value="R&B">R&amp;B</div>
-          <div class="chip" data-filter="genre" data-value="Jazz">Jazz</div>
-          <div class="chip" data-filter="genre" data-value="Electronic">Electronic</div>
-        </div>
-      </div>
-      <div class="filter-divider"></div>
-      <div class="filter-group">
-        <span class="filter-group-title">Decade</span>
-        <div class="chip-row" id="decadeChips">
-          <div class="chip active" data-filter="decade" data-value="all">All</div>
-          <div class="chip" data-filter="decade" data-value="60s">60s</div>
-          <div class="chip" data-filter="decade" data-value="70s">70s</div>
-          <div class="chip" data-filter="decade" data-value="80s">80s</div>
-          <div class="chip" data-filter="decade" data-value="90s">90s</div>
-          <div class="chip" data-filter="decade" data-value="2000s">2000s</div>
-          <div class="chip" data-filter="decade" data-value="2010s">2010s</div>
-          <div class="chip" data-filter="decade" data-value="2020s">2020s</div>
-        </div>
-      </div>
-      <button class="clear-btn" id="clearFilters"><i class="fa-solid fa-rotate-left"></i> Reset Filters</button>
-    </div>
-  </section>
+
 
   <!-- SORT BAR -->
   <div class="sort-bar">
     <span><b id="visibleCount">16</b> albums found</span>
     <select class="sort-select" id="sortSelect">
       <option value="default">Sort: Default</option>
+      <option value="decade-60s">Decade: 60s</option>
+      <option value="decade-70s">Decade: 70s</option>
+      <option value="decade-80s">Decade: 80s</option>
+      <option value="decade-90s">Decade: 90s</option>
+      <option value="decade-2000s">Decade: 2000s</option>
+      <option value="decade-2010s">Decade: 2010s</option>
+      <option value="decade-2020s">Decade: 2020s</option>
       <option value="year-desc">Year: Newest First</option>
       <option value="year-asc">Year: Oldest First</option>
-      <option value="title-az">Title: Aâ€“Z</option>
-      <option value="artist-az">Artist: Aâ€“Z</option>
+      <option value="title-az">Title: A-Z</option>
+      <option value="artist-az">Artist: A-Z</option>
     </select>
   </div>
 
@@ -115,7 +87,6 @@
         <p class="modal-desc" id="modalDesc"></p>
         <div class="modal-actions">
           <button class="btn-primary" id="modalListen"><i class="fa-solid fa-play"></i> Listen Now</button>
-          <button class="btn-secondary" id="modalAdd"><i class="fa-solid fa-plus"></i> Playlist</button>
         </div>
       </div>
     </div>
