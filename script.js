@@ -8,42 +8,134 @@ function normalizeText(value) {
     .trim();
 }
 
-function pickBestItunesMatch(results, title, artist) {
+function normalizeAlbumTitle(value) {
+  return normalizeText(value)
+    .replace(/\b(deluxe|edition|remaster|remastered|version|single|ep|explicit|clean)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const COVER_CACHE_KEY = 'soundmatch-cover-cache-v1';
+
+function getAlbumCacheKey(album) {
+  return `${normalizeText(album.title)}|${normalizeText(album.artist)}`;
+}
+
+function readCoverCache() {
+  try {
+    const raw = localStorage.getItem(COVER_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function writeCoverCache(cache) {
+  try {
+    localStorage.setItem(COVER_CACHE_KEY, JSON.stringify(cache));
+  } catch (e) {
+    // Ignore storage quota/privacy mode errors.
+  }
+}
+
+function getWordSet(value) {
+  return new Set(normalizeText(value).split(' ').filter(Boolean));
+}
+
+function overlapScore(a, b) {
+  const aSet = getWordSet(a);
+  const bSet = getWordSet(b);
+  if (!aSet.size || !bSet.size) return 0;
+  let overlap = 0;
+  for (const token of aSet) {
+    if (bSet.has(token)) overlap += 1;
+  }
+  return overlap / Math.max(aSet.size, bSet.size);
+}
+
+function pickBestItunesMatch(results, title, artist, year, tracks) {
   const wantedTitle = normalizeText(title);
+  const wantedCoreTitle = normalizeAlbumTitle(title);
   const wantedArtist = normalizeText(artist);
+  const blockedTerms = ['tribute', 'karaoke', 'instrumental', 'interview', 'live', 'commentary'];
 
   const ranked = (results || []).map(item => {
     const itemTitle = normalizeText(item.collectionName);
+    const itemCoreTitle = normalizeAlbumTitle(item.collectionName);
     const itemArtist = normalizeText(item.artistName);
+    const itemYear = Number((item.releaseDate || '').slice(0, 4));
+    const itemTracks = Number(item.trackCount || 0);
+    const titleOverlap = overlapScore(itemTitle, wantedTitle);
+    const coreTitleOverlap = overlapScore(itemCoreTitle, wantedCoreTitle);
+    const artistOverlap = overlapScore(itemArtist, wantedArtist);
     let score = 0;
 
     if (itemTitle === wantedTitle) score += 6;
     if (itemArtist === wantedArtist) score += 6;
     if (itemTitle.includes(wantedTitle) || wantedTitle.includes(itemTitle)) score += 3;
     if (itemArtist.includes(wantedArtist) || wantedArtist.includes(itemArtist)) score += 3;
+    score += Math.round(titleOverlap * 8);
+    score += Math.round(coreTitleOverlap * 10);
+    score += Math.round(artistOverlap * 6);
+    if (year && itemYear === year) score += 4;
+    if (year && itemYear && Math.abs(itemYear - year) <= 1) score += 2;
+    if (tracks && itemTracks && Math.abs(itemTracks - tracks) <= 1) score += 2;
+    if (blockedTerms.some(term => itemTitle.includes(term))) score -= 5;
 
-    return { item, score };
+    return { item, score, titleOverlap, coreTitleOverlap, artistOverlap };
   });
 
   ranked.sort((a, b) => b.score - a.score);
-  return ranked[0]?.score > 0 ? ranked[0].item : null;
+
+  function isAcceptableMatch(candidate) {
+    if (!candidate) return false;
+    const candidateTitle = normalizeText(candidate.item.collectionName);
+    const candidateCoreTitle = normalizeAlbumTitle(candidate.item.collectionName);
+
+    const titleLooksRelevant =
+      candidate.titleOverlap >= 0.25 ||
+      candidate.coreTitleOverlap >= 0.25 ||
+      candidateTitle === wantedTitle ||
+      candidateTitle.includes(wantedTitle) ||
+      wantedTitle.includes(candidateTitle) ||
+      candidateCoreTitle === wantedCoreTitle;
+
+    const artistLooksRelevant =
+      candidate.artistOverlap >= 0.6 ||
+      normalizeText(candidate.item.artistName) === wantedArtist ||
+      normalizeText(candidate.item.artistName).includes(wantedArtist) ||
+      wantedArtist.includes(normalizeText(candidate.item.artistName));
+
+    return titleLooksRelevant && artistLooksRelevant;
+  }
+
+  const best = ranked.find(isAcceptableMatch);
+  if (!best) return null;
+
+  return best.item;
 }
 
-async function itunesLookup(title, artist) {
+async function itunesLookup(title, artist, year, tracks) {
   try {
     const query = `${title} ${artist}`.trim();
     const endpoints = [
       `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=album&limit=10`,
-      `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=album&limit=10`
+      `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=album&limit=10`,
+      `https://itunes.apple.com/search?term=${encodeURIComponent(title)}&entity=album&attribute=albumTerm&limit=25`,
+      `https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&entity=album&attribute=artistTerm&limit=25`,
+      `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=15`
     ];
 
     for (const url of endpoints) {
       const res = await fetch(url);
       if (!res.ok) continue;
       const data = await res.json();
-      const hit = pickBestItunesMatch(data.results, title, artist);
-      if (hit?.artworkUrl100) {
-        return hit.artworkUrl100.replace('100x100bb.jpg', '600x600bb.jpg');
+      const hit = pickBestItunesMatch(data.results, title, artist, year, tracks);
+      const artwork = hit?.artworkUrl100 || hit?.artworkUrl60 || hit?.artworkUrl30;
+      if (artwork) {
+        return artwork.replace(/\/\d+x\d+bb\.(jpg|png)/, '/600x600bb.$1');
       }
     }
     return null;
@@ -57,11 +149,39 @@ async function loadAlbumCoverURLs() {
   const statusEl = document.getElementById('apiStatus');
   if (statusEl) statusEl.textContent = 'API status: loading album covers...';
 
+  coversLoading = true;
+  const coverCache = readCoverCache();
+
   let loaded = 0;
   for (const album of albums) {
-    album.coverUrl = await itunesLookup(album.title, album.artist);
+    if (album.manualCoverUrl) {
+      album.coverUrl = album.manualCoverUrl;
+    } else {
+      const cached = coverCache[getAlbumCacheKey(album)];
+      if (cached) album.coverUrl = cached;
+    }
     if (album.coverUrl) loaded += 1;
   }
+
+  renderGrid();
+
+  for (const album of albums) {
+    if (album.manualCoverUrl || album.coverUrl) {
+      continue;
+    }
+
+    const resolvedUrl = await itunesLookup(album.title, album.artist, album.year, album.tracks);
+    if (resolvedUrl) {
+      album.coverUrl = resolvedUrl;
+      coverCache[getAlbumCacheKey(album)] = resolvedUrl;
+      loaded += 1;
+      renderGrid();
+    }
+  }
+
+  writeCoverCache(coverCache);
+  coversLoading = false;
+  renderGrid();
 
   if (statusEl) {
     statusEl.textContent = loaded > 0
@@ -71,6 +191,7 @@ async function loadAlbumCoverURLs() {
 }
 
 let currentAlbum = null;
+let coversLoading = true;
 
 /* ========================================================
    DATA
@@ -84,11 +205,11 @@ const albums = [
     tracks: 9
   },
   {
-    id: 2, title: "Minor Threat", artist: "Minor Threat",
-    year: 1981, genre: "Rock",
+    id: 2, title: "First Two Seven Inches", artist: "Minor Threat",
+    year: 1984, genre: "Rock",
     emoji: "⚡", gradient: "linear-gradient(135deg, #111111, #7a0000)",
-    desc: "The explosive debut EP that helped define Washington, D.C. hardcore with relentless speed, direct lyrics, and uncompromising energy.",
-    tracks: 8
+    desc: "A foundational D.C. hardcore release collecting Minor Threat's early EP material with raw speed, urgency, and straight-edge influence.",
+    tracks: 14
   },
   {
     id: 3, title: "Kind of Blue", artist: "Miles Davis",
@@ -98,18 +219,18 @@ const albums = [
     tracks: 5
   },
   {
-    id: 4, title: "IGOR", artist: "Tyler, The Creator",
-    year: 2019, genre: "Hip-Hop",
+    id: 4, title: "DON'T TAP THE GLASS", artist: "Tyler, the Creator",
+    year: 2025, genre: "Hip-Hop",
     emoji: "🩷", gradient: "linear-gradient(135deg, #f2a7c0, #c2185b)",
-    desc: "A genre-bending, emotionally charged album that blends soul, rap, funk, and pop into one of Tyler's most acclaimed releases.",
-    tracks: 12
+    desc: "A recent Tyler release with punchy production, sharp songwriting, and a modern rap focus that still feels experimental.",
+    tracks: 10
   },
   {
-    id: 5, title: "The Chronic", artist: "Dr. Dre",
-    year: 1992, genre: "Hip-Hop",
+    id: 5, title: "2001", artist: "Dr. Dre",
+    year: 1999, genre: "Hip-Hop",
     emoji: "🎤", gradient: "linear-gradient(135deg, #134e5e, #71b280)",
-    desc: "The record that introduced G-Funk to the world. A West Coast hip-hop landmark still influential to this day.",
-    tracks: 16
+    desc: "A polished and influential Dr. Dre classic that defined late-90s West Coast hip-hop production.",
+    tracks: 22
   },
   {
     id: 6, title: "Random Access Memories", artist: "Daft Punk",
@@ -133,11 +254,11 @@ const albums = [
     tracks: 16
   },
   {
-    id: 9, title: "Blonde", artist: "Frank Ocean",
-    year: 2016, genre: "R&B",
+    id: 9, title: "Swim Good - Single", artist: "Frank Ocean",
+    year: 2011, genre: "R&B",
     emoji: "🌊", gradient: "linear-gradient(135deg, #4facfe, #00f2fe)",
-    desc: "An introspective, fragmented journey through youth and memory. Ocean's stream-of-consciousness approach feels deeply intimate.",
-    tracks: 17
+    desc: "A moody, melodic Frank Ocean single from his early breakout era, blending introspective songwriting with alt-R&B atmosphere.",
+    tracks: 1
   },
   {
     id: 10, title: "Madvillainy", artist: "Madvillain",
@@ -147,11 +268,11 @@ const albums = [
     tracks: 22
   },
   {
-    id: 11, title: "The Dark Side of the Moon", artist: "Pink Floyd",
-    year: 1973, genre: "Rock",
+    id: 11, title: "Wish You Were Here", artist: "Pink Floyd",
+    year: 1975, genre: "Rock",
     emoji: "🌑", gradient: "linear-gradient(135deg, #000000, #434343)",
-    desc: "A groundbreaking concept album exploring the human experience — greed, time, mental illness — via seamless psychedelic rock.",
-    tracks: 10
+    desc: "A landmark progressive rock album balancing emotional depth, rich arrangements, and some of Pink Floyd's most celebrated songwriting.",
+    tracks: 5
   },
   {
     id: 12, title: "Currents", artist: "Tame Impala",
@@ -185,6 +306,7 @@ const albums = [
     id: 16, title: "Nevermind", artist: "Nirvana",
     year: 1991, genre: "Rock",
     emoji: "💥", gradient: "linear-gradient(135deg, #2c3e50, #3498db)",
+    manualCoverUrl: "https://upload.wikimedia.org/wikipedia/en/b/b7/NirvanaNevermindalbumcover.jpg",
     desc: "The album that brought alternative rock to the mainstream and defined a generation's disillusionment and raw energy.",
     tracks: 13
   }
@@ -262,12 +384,16 @@ function renderGrid() {
 
   data.forEach(album => {
     const gc = genreColors[album.genre] || genreColors["Pop"];
+    const coverStateClass = album.coverUrl ? ' has-img' : (coversLoading ? ' loading' : ' placeholder');
+    const coverInnerHtml = album.coverUrl
+      ? `<img src="${album.coverUrl}" alt="${album.title}" class="cover-img">`
+      : `<span class="cover-placeholder-label">${coversLoading ? 'Loading...' : 'No Cover'}</span>`;
     const card = document.createElement("div");
     card.className = "album-card";
     card.dataset.id = album.id;
     card.innerHTML = `
-      <div class="card-cover${album.coverUrl ? ' has-img' : ''}" style="${album.coverUrl ? '' : 'background:'+album.gradient}">
-        ${album.coverUrl ? `<img src="${album.coverUrl}" alt="${album.title}" class="cover-img">` : album.emoji}
+      <div class="card-cover${coverStateClass}">
+        ${coverInnerHtml}
         <span class="card-badge">${album.year}</span>
         <div class="play-overlay"><i class="fa-solid fa-circle-play"></i></div>
       </div>
@@ -298,10 +424,10 @@ function openModal(album) {
   document.getElementById('modalTitle').textContent  = album.title;
   document.getElementById('modalArtist').textContent = 'by ' + album.artist;
   document.getElementById('modalDesc').textContent   = album.desc;
-  coverEl.style.background = album.coverUrl ? '#000' : album.gradient;
+  coverEl.style.background = album.coverUrl ? '#000' : '#11141d';
   coverEl.innerHTML = album.coverUrl
     ? `<img src="${album.coverUrl}" alt="${album.title}" class="modal-cover-img"><button class="modal-close" id="modalClose" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>`
-    : `<span style="font-size:5rem">${album.emoji}</span><button class="modal-close" id="modalClose" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>`;
+    : `<div class="modal-cover-placeholder">No Cover Available</div><button class="modal-close" id="modalClose" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>`;
   const genreTag = `<span class="modal-tag" style="background:${gc.bg};color:${gc.color};border:1px solid ${gc.border}">${album.genre}</span>`;
   document.getElementById('modalTags').innerHTML = `${genreTag}
     <span class="modal-tag"><i class="fa-solid fa-calendar"></i> ${album.year||'N/A'}</span>
@@ -348,6 +474,6 @@ document.addEventListener("keydown", e => {
   INIT
 ======================================================== */
 (async () => {
-  await loadAlbumCoverURLs();
   renderGrid();
+  await loadAlbumCoverURLs();
 })();

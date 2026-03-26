@@ -38,7 +38,7 @@ nav {
   color: var(--text); text-decoration: none;
 }
 .nav-logo i { color: var(--accent2); font-size: 1.4rem; }
-.nav-logo span { background: linear-gradient(90deg, var(--accent2), var(--pink)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.nav-logo span { background: linear-gradient(90deg, var(--accent2), var(--pink)); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 .nav-links { display: flex; gap: 1.6rem; list-style: none; }
 .nav-links a { color: var(--muted); text-decoration: none; font-size: .9rem; font-weight: 500; transition: color .2s; }
 .nav-links a:hover { color: var(--text); }
@@ -71,6 +71,7 @@ nav {
 }
 .hero h1 span {
   background: linear-gradient(90deg, var(--accent2), var(--pink));
+  background-clip: text;
   -webkit-background-clip: text; -webkit-text-fill-color: transparent;
 }
 .hero p {
@@ -155,10 +156,30 @@ nav {
   display: flex; align-items: center; justify-content: center;
   font-size: 4rem; overflow: hidden;
 }
+.card-cover.placeholder {
+  background: linear-gradient(135deg, #12151d, #1c2230);
+}
+.card-cover.loading {
+  background: linear-gradient(120deg, #161b28 15%, #2a3043 40%, #161b28 65%);
+  background-size: 220% 100%;
+  animation: coverShimmer 1.35s linear infinite;
+}
+@keyframes coverShimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
 .card-cover::after {
   content: '';
   position: absolute; inset: 0;
   background: linear-gradient(to bottom, transparent 50%, rgba(0,0,0,.6));
+}
+.cover-placeholder-label {
+  position: relative;
+  z-index: 1;
+  font-size: .85rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: rgba(240,240,250,.55);
 }
 .card-badge {
   position: absolute; top: .7rem; right: .7rem; z-index: 2;
@@ -223,6 +244,12 @@ nav {
 .modal-cover {
   height: 220px; display: flex; align-items: center;
   justify-content: center; font-size: 6rem; position: relative;
+}
+.modal-cover-placeholder {
+  font-size: 1rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: rgba(240,240,250,.55);
 }
 .modal-close {
   position: absolute; top: 1rem; right: 1rem;
